@@ -1238,10 +1238,6 @@ func flattenInstanceGroup(ig *emr.InstanceGroup) (map[string]interface{}, error)
 		attrs["autoscaling_policy"] = ""
 	}
 
-	if attrs["name"] != nil {
-		attrs["name"] = *ig.Name
-	}
-
 	return attrs, nil
 }
 
