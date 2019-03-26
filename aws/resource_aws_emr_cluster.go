@@ -1025,6 +1025,13 @@ func resourceAwsEMRClusterDelete(d *schema.ResourceData, meta interface{}) error
 		return resource.RetryableError(fmt.Errorf("EMR Cluster (%s) has (%d) Instances remaining, retrying", d.Id(), len(resp.Instances)))
 	})
 
+	if isResourceTimeoutError(err) {
+		_, err = conn.ListInstances(&emr.ListInstancesInput{
+			ClusterId: aws.String(d.Id()),
+		})
+
+	}
+
 	if err != nil {
 		return fmt.Errorf("error waiting for EMR Cluster (%s) Instances to drain", d.Id())
 	}
