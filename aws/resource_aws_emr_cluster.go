@@ -1723,3 +1723,18 @@ func resourceAwsEMRClusterEBSConfigHash(v interface{}) int {
 	}
 	return hashcode.String(buf.String())
 }
+
+func fetchAllEMRInstanceGroups(conn *emr.EMR, clusterID string) ([]*emr.InstanceGroup, error) {
+	input := &emr.ListInstanceGroupsInput{
+		ClusterId: aws.String(clusterID),
+	}
+	var groups []*emr.InstanceGroup
+
+	err := conn.ListInstanceGroupsPages(input, func(page *emr.ListInstanceGroupsOutput, lastPage bool) bool {
+		groups = append(groups, page.InstanceGroups...)
+
+		return !lastPage
+	})
+
+	return groups, err
+}
