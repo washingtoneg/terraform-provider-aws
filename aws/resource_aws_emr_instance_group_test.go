@@ -26,7 +26,7 @@ func TestAccAWSEMRInstanceGroup_basic(t *testing.T) {
 				Config: testAccAWSEmrInstanceGroupConfig_basic(rInt),
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckAWSEmrInstanceGroupExists(resourceName, &ig),
-					resource.TestCheckResourceAttr("aws_emr_instance_group.task", "instance_role", "TASK"),
+					resource.TestCheckResourceAttr("aws_emr_instance_group.task", "instance_role", emr.InstanceGroupTypeTask),
 				),
 			},
 			{
@@ -195,16 +195,11 @@ func testAccAWSEMRInstanceGroupResourceImportStateIdFunc(resourceName string) re
 			return "", fmt.Errorf("Not found: %s", resourceName)
 		}
 
-		log.Println(fmt.Sprintf("%s/%s", rs.Primary.Attributes["cluster_id"], rs.Primary.ID))
 		return fmt.Sprintf("%s/%s", rs.Primary.Attributes["cluster_id"], rs.Primary.ID), nil
 	}
 }
 
 const testAccAWSEmrInstanceGroupBase = `
-provider "aws" {
-  region = "us-west-2"
-}
-
 resource "aws_security_group" "allow_all" {
   name        = "allow_all"
   description = "Allow all inbound traffic"
@@ -234,19 +229,11 @@ resource "aws_security_group" "allow_all" {
 resource "aws_vpc" "main" {
   cidr_block           = "168.31.0.0/16"
   enable_dns_hostnames = true
-
-	tags = {
-		Name = "terraform-testacc-emr-instance-group"
-	}
 }
 
 resource "aws_subnet" "main" {
   vpc_id     = "${aws_vpc.main.id}"
   cidr_block = "168.31.0.0/20"
-
-  tags = {
-    Name = "tf-acc-emr-instance-group"
-  }
 }
 
 resource "aws_internet_gateway" "gw" {
@@ -280,16 +267,9 @@ resource "aws_emr_cluster" "tf-test-cluster" {
     instance_profile                  = "${aws_iam_instance_profile.emr_profile.arn}"
   }
 
-  master_instance_type = "m4.large"
-  core_instance_type = "m4.large"
+  master_instance_type = "c4.large"
+  core_instance_type = "c4.large"
   core_instance_count = 2
-
-  tags = {
-    role     = "rolename"
-    dns_zone = "env_zone"
-    env      = "env"
-    name     = "name-env"
-  }
 
   bootstrap_action {
     path = "s3://elasticmapreduce/bootstrap-actions/run-if"
@@ -498,9 +478,8 @@ func testAccAWSEmrInstanceGroupConfig_basic(r int) string {
 	return fmt.Sprintf(testAccAWSEmrInstanceGroupBase+`
 	resource "aws_emr_instance_group" "task" {
     cluster_id     = "${aws_emr_cluster.tf-test-cluster.id}"
-    instance_role  = "TASK"
     instance_count = 1
-    instance_type  = "m4.large"
+    instance_type  = "c4.large"
   }
 	`, r)
 }
@@ -511,7 +490,7 @@ func testAccAWSEmrInstanceGroupConfig_AutoScalingPolicy(r, min, max int) string 
     cluster_id     = "${aws_emr_cluster.tf-test-cluster.id}"
     instance_role  = "TASK"
     instance_count = 1
-    instance_type  = "m4.large"
+    instance_type  = "c4.large"
     autoscaling_policy = <<EOT
 {
   "Constraints": {
@@ -555,7 +534,7 @@ func testAccAWSEmrInstanceGroupConfig_ebsConfig(r int) string {
     cluster_id     = "${aws_emr_cluster.tf-test-cluster.id}"
     instance_role  = "TASK"
     instance_count = 1
-    instance_type  = "m4.large"
+    instance_type  = "c4.large"
     ebs_optimized = true
     ebs_config {
       size = 10
@@ -571,7 +550,7 @@ func testAccAWSEmrInstanceGroupConfig_zeroCount(r int) string {
     cluster_id     = "${aws_emr_cluster.tf-test-cluster.id}"
     instance_role  = "TASK"
     instance_count = 0
-    instance_type  = "m4.large"
+    instance_type  = "c4.large"
   }
 	`, r)
 }
