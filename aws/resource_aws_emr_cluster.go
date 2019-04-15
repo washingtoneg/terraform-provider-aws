@@ -1262,6 +1262,7 @@ func flattenInstanceGroups(igs []*emr.InstanceGroup) (*schema.Set, error) {
 }
 
 func flattenEBSConfig(ebsBlockDevices []*emr.EbsBlockDevice) *schema.Set {
+
 	ebsConfig := make([]interface{}, 0)
 	for _, ebs := range ebsBlockDevices {
 		ebsAttrs := make(map[string]interface{})

@@ -16,6 +16,7 @@ import (
 func TestAccAWSEMRInstanceGroup_basic(t *testing.T) {
 	var ig emr.InstanceGroup
 	rInt := acctest.RandInt()
+
 	resourceName := "aws_emr_instance_group.task"
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
@@ -26,7 +27,10 @@ func TestAccAWSEMRInstanceGroup_basic(t *testing.T) {
 				Config: testAccAWSEmrInstanceGroupConfig_basic(rInt),
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckAWSEmrInstanceGroupExists(resourceName, &ig),
-					resource.TestCheckResourceAttr("aws_emr_instance_group.task", "instance_role", emr.InstanceGroupTypeTask),
+					resource.TestCheckResourceAttr(resourceName, "autoscaling_policy", ""),
+					resource.TestCheckResourceAttr(resourceName, "bid_price", ""),
+					resource.TestCheckResourceAttr(resourceName, "ebs_optimized", "false"),
+					resource.TestCheckResourceAttr(resourceName, "instance_role", emr.InstanceGroupTypeTask),
 				),
 			},
 			{
@@ -39,9 +43,63 @@ func TestAccAWSEMRInstanceGroup_basic(t *testing.T) {
 	})
 }
 
+func TestAccAWSEMRInstanceGroup_BidPrice(t *testing.T) {
+	var ig1, ig2 emr.InstanceGroup
+	rInt := acctest.RandInt()
+
+	resourceName := "aws_emr_instance_group.task"
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSEmrInstanceGroupDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSEmrInstanceGroupConfig_basic(rInt),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSEmrInstanceGroupExists(resourceName, &ig1),
+					resource.TestCheckResourceAttr(resourceName, "instance_role", emr.InstanceGroupTypeTask),
+					resource.TestCheckResourceAttr(resourceName, "bid_price", ""),
+				),
+			},
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateIdFunc: testAccAWSEMRInstanceGroupResourceImportStateIdFunc(resourceName),
+				ImportStateVerify: true,
+			},
+			{
+				Config: testAccAWSEmrInstanceGroupConfig_BidPrice(rInt),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSEmrInstanceGroupExists(resourceName, &ig2),
+					resource.TestCheckResourceAttr(resourceName, "instance_role", emr.InstanceGroupTypeTask),
+					resource.TestCheckResourceAttr(resourceName, "bid_price", "0.30"),
+					testAccAWSEMRInstanceGroupRecreated(t, &ig1, &ig2),
+				),
+			},
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateIdFunc: testAccAWSEMRInstanceGroupResourceImportStateIdFunc(resourceName),
+				ImportStateVerify: true,
+			},
+			{
+				Config: testAccAWSEmrInstanceGroupConfig_basic(rInt),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSEmrInstanceGroupExists(resourceName, &ig1),
+					resource.TestCheckResourceAttr(resourceName, "instance_role", emr.InstanceGroupTypeTask),
+					resource.TestCheckResourceAttr(resourceName, "bid_price", ""),
+					testAccAWSEMRInstanceGroupRecreated(t, &ig1, &ig2),
+				),
+			},
+		},
+	})
+}
+
 func TestAccAWSEMRInstanceGroup_AutoScalingPolicy(t *testing.T) {
 	var ig emr.InstanceGroup
 	rInt := acctest.RandInt()
+
+	resourceName := "aws_emr_instance_group.task"
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
@@ -50,10 +108,16 @@ func TestAccAWSEMRInstanceGroup_AutoScalingPolicy(t *testing.T) {
 			{
 				Config: testAccAWSEmrInstanceGroupConfig_AutoScalingPolicy(rInt, 1, 3),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckAWSEmrInstanceGroupExists("aws_emr_instance_group.task", &ig),
-					resource.TestCheckResourceAttr("aws_emr_instance_group.task", "instance_role", "TASK"),
-					resource.TestCheckResourceAttrSet("aws_emr_instance_group.task", "autoscaling_policy"),
+					testAccCheckAWSEmrInstanceGroupExists(resourceName, &ig),
+					resource.TestCheckResourceAttr(resourceName, "instance_role", "TASK"),
+					resource.TestCheckResourceAttrSet(resourceName, "autoscaling_policy"),
 				),
+			},
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateIdFunc: testAccAWSEMRInstanceGroupResourceImportStateIdFunc(resourceName),
+				ImportStateVerify: true,
 			},
 		},
 	})
@@ -62,6 +126,8 @@ func TestAccAWSEMRInstanceGroup_AutoScalingPolicy(t *testing.T) {
 func TestAccAWSEMRInstanceGroup_updateAutoScalingPolicy(t *testing.T) {
 	var ig emr.InstanceGroup
 	rInt := acctest.RandInt()
+
+	resourceName := "aws_emr_instance_group.task"
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
@@ -70,17 +136,23 @@ func TestAccAWSEMRInstanceGroup_updateAutoScalingPolicy(t *testing.T) {
 			{
 				Config: testAccAWSEmrInstanceGroupConfig_AutoScalingPolicy(rInt, 1, 3),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckAWSEmrInstanceGroupExists("aws_emr_instance_group.task", &ig),
-					resource.TestCheckResourceAttr("aws_emr_instance_group.task", "instance_role", "TASK"),
-					resource.TestCheckResourceAttrSet("aws_emr_instance_group.task", "autoscaling_policy"),
+					testAccCheckAWSEmrInstanceGroupExists(resourceName, &ig),
+					resource.TestCheckResourceAttr(resourceName, "instance_role", "TASK"),
+					resource.TestCheckResourceAttrSet(resourceName, "autoscaling_policy"),
 				),
+			},
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateIdFunc: testAccAWSEMRInstanceGroupResourceImportStateIdFunc(resourceName),
+				ImportStateVerify: true,
 			},
 			{
 				Config: testAccAWSEmrInstanceGroupConfig_AutoScalingPolicy(rInt, 2, 3),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckAWSEmrInstanceGroupExists("aws_emr_instance_group.task", &ig),
-					resource.TestCheckResourceAttr("aws_emr_instance_group.task", "instance_role", "TASK"),
-					resource.TestCheckResourceAttrSet("aws_emr_instance_group.task", "autoscaling_policy"),
+					testAccCheckAWSEmrInstanceGroupExists(resourceName, &ig),
+					resource.TestCheckResourceAttr(resourceName, "instance_role", "TASK"),
+					resource.TestCheckResourceAttrSet(resourceName, "autoscaling_policy"),
 				),
 			},
 		},
@@ -92,6 +164,8 @@ func TestAccAWSEMRInstanceGroup_updateAutoScalingPolicy(t *testing.T) {
 func TestAccAWSEMRInstanceGroup_updateInstanceCount(t *testing.T) {
 	var ig emr.InstanceGroup
 	rInt := acctest.RandInt()
+
+	resourceName := "aws_emr_instance_group.task"
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
@@ -99,11 +173,17 @@ func TestAccAWSEMRInstanceGroup_updateInstanceCount(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config: testAccAWSEmrInstanceGroupConfig_basic(rInt),
-				Check:  testAccCheckAWSEmrInstanceGroupExists("aws_emr_instance_group.task", &ig),
+				Check:  testAccCheckAWSEmrInstanceGroupExists(resourceName, &ig),
+			},
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateIdFunc: testAccAWSEMRInstanceGroupResourceImportStateIdFunc(resourceName),
+				ImportStateVerify: true,
 			},
 			{
 				Config: testAccAWSEmrInstanceGroupConfig_zeroCount(rInt),
-				Check:  testAccCheckAWSEmrInstanceGroupExists("aws_emr_instance_group.task", &ig),
+				Check:  testAccCheckAWSEmrInstanceGroupExists(resourceName, &ig),
 			},
 		},
 	})
@@ -112,6 +192,8 @@ func TestAccAWSEMRInstanceGroup_updateInstanceCount(t *testing.T) {
 func TestAccAWSEMRInstanceGroup_ebsConfig(t *testing.T) {
 	var ig emr.InstanceGroup
 	rInt := acctest.RandInt()
+
+	resourceName := "aws_emr_instance_group.task"
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
@@ -120,11 +202,23 @@ func TestAccAWSEMRInstanceGroup_ebsConfig(t *testing.T) {
 			{
 				Config: testAccAWSEmrInstanceGroupConfig_ebsConfig(rInt),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckAWSEmrInstanceGroupExists("aws_emr_instance_group.task", &ig),
-					resource.TestCheckResourceAttr(
-						"aws_emr_instance_group.task", "ebs_config.#", "1"),
-					resource.TestCheckResourceAttr(
-						"aws_emr_instance_group.task", "ebs_optimized", "true"),
+					testAccCheckAWSEmrInstanceGroupExists(resourceName, &ig),
+					resource.TestCheckResourceAttr(resourceName, "ebs_config.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "ebs_optimized", "true"),
+				),
+			},
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateIdFunc: testAccAWSEMRInstanceGroupResourceImportStateIdFunc(resourceName),
+				ImportStateVerify: true,
+			},
+			{
+				Config: testAccAWSEmrInstanceGroupConfig_ebsConfig(rInt),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSEmrInstanceGroupExists(resourceName, &ig),
+					resource.TestCheckResourceAttr(resourceName, "ebs_config.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "ebs_optimized", "true"),
 				),
 			},
 		},
@@ -152,12 +246,10 @@ func testAccCheckAWSEmrInstanceGroupDestroy(s *terraform.State) error {
 			}
 		}
 
-		providerErr, ok := err.(awserr.Error)
-		if !ok {
+		if providerErr, ok := err.(awserr.Error); !ok {
+			log.Printf("[ERROR] %v", providerErr)
 			return err
 		}
-
-		log.Printf("[ERROR] %v", providerErr)
 	}
 
 	return nil
@@ -196,6 +288,15 @@ func testAccAWSEMRInstanceGroupResourceImportStateIdFunc(resourceName string) re
 		}
 
 		return fmt.Sprintf("%s/%s", rs.Primary.Attributes["cluster_id"], rs.Primary.ID), nil
+	}
+}
+
+func testAccAWSEMRInstanceGroupRecreated(t *testing.T, before, after *emr.InstanceGroup) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		if *before.Id == *after.Id {
+			t.Fatalf("Expected change of Instance Group Ids, but both were %v", before.Id)
+		}
+		return nil
 	}
 }
 
@@ -478,6 +579,17 @@ func testAccAWSEmrInstanceGroupConfig_basic(r int) string {
 	return fmt.Sprintf(testAccAWSEmrInstanceGroupBase+`
 	resource "aws_emr_instance_group" "task" {
     cluster_id     = "${aws_emr_cluster.tf-test-cluster.id}"
+    instance_count = 1
+    instance_type  = "c4.large"
+  }
+	`, r)
+}
+
+func testAccAWSEmrInstanceGroupConfig_BidPrice(r int) string {
+	return fmt.Sprintf(testAccAWSEmrInstanceGroupBase+`
+	resource "aws_emr_instance_group" "task" {
+    cluster_id     = "${aws_emr_cluster.tf-test-cluster.id}"
+    bid_price			 = "0.30"
     instance_count = 1
     instance_type  = "c4.large"
   }

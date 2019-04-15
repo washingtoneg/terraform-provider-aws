@@ -56,26 +56,32 @@ func resourceAwsEMRInstanceGroup() *schema.Resource {
 				ForceNew: true,
 			},
 			"ebs_config": {
-				Type:     schema.TypeSet,
+				Type:     schema.TypeList,
 				Optional: true,
+				Computed: true,
 				ForceNew: true,
+				MinItems: 1,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"iops": {
 							Type:     schema.TypeInt,
+							ForceNew: true,
 							Optional: true,
 						},
 						"size": {
 							Type:     schema.TypeInt,
+							ForceNew: true,
 							Required: true,
 						},
 						"type": {
 							Type:         schema.TypeString,
 							Required:     true,
+							ForceNew:     true,
 							ValidateFunc: validateAwsEmrEbsVolumeType(),
 						},
 						"volumes_per_instance": {
 							Type:     schema.TypeInt,
+							ForceNew: true,
 							Optional: true,
 						},
 					},
@@ -92,7 +98,6 @@ func resourceAwsEMRInstanceGroup() *schema.Resource {
 				ForceNew: true,
 				Default:  emr.InstanceGroupTypeTask,
 				ValidateFunc: validation.StringInSlice([]string{
-					emr.InstanceGroupTypeCore,
 					emr.InstanceGroupTypeTask}, false),
 			},
 			"instance_type": {
@@ -138,8 +143,10 @@ func resourceAwsEMRInstanceGroupCreate(d *schema.ResourceData, meta interface{})
 		groupConfig.AutoScalingPolicy = autoScalingPolicy
 	}
 
+	groupConfig.Market = aws.String(emr.MarketTypeOnDemand)
 	if v, ok := d.GetOk("bid_price"); ok {
 		groupConfig.BidPrice = aws.String(v.(string))
+		groupConfig.Market = aws.String(emr.MarketTypeSpot)
 	}
 
 	params := &emr.AddInstanceGroupsInput{
@@ -209,6 +216,7 @@ func resourceAwsEMRInstanceGroupRead(d *schema.ResourceData, meta interface{}) e
 	d.Set("autoscaling_policy", autoscalingPolicyString)
 
 	d.Set("bid_price", ig.BidPrice)
+	d.Set("ebs_config", flattenEBSConfig(ig.EbsBlockDevices))
 	d.Set("instance_count", ig.RequestedInstanceCount)
 	d.Set("instance_role", ig.InstanceGroupType)
 	d.Set("instance_type", ig.InstanceType)
@@ -237,6 +245,8 @@ func resourceAwsEMRInstanceGroupUpdate(d *schema.ResourceData, meta interface{})
 				},
 			},
 		}
+
+		// Give me some EBS config stuff.
 
 		_, err := conn.ModifyInstanceGroups(params)
 		if err != nil {

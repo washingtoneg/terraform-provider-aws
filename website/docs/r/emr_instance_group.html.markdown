@@ -32,7 +32,7 @@ The following arguments are supported:
 
 * `name` (Required) Human friendly name given to the instance group. Changing this forces a new resource to be created.
 * `cluster_id` (Required) ID of the EMR Cluster to attach to. Changing this forces a new resource to be created.
-* `instance_role` (Optional) The EC2 instance role for all instances in the instance group. Valid values are CORE, TASK. Default `"TASK"`
+* `instance_role` (Optional) The EC2 instance role for all instances in the instance group. Default `"TASK"`
 * `instance_type` (Required) The EC2 instance type for all instances in the instance group. Changing this forces a new resource to be created.
 * `instance_count` (optional) target number of instances for the instance group. defaults to 0.
 * `bid_price` - (Optional) If set, the bid price for each EC2 instance in the instance group, expressed in USD. By setting this attribute, the instance group is being declared as a Spot Instance, and will implicitly create a Spot request. Leave this blank to use On-Demand Instances.
