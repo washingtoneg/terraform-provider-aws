@@ -414,7 +414,6 @@ func resourceAwsRDSCluster() *schema.Resource {
 					}, false),
 				},
 			},
-<<<<<<< HEAD
 			"point_in_time_restore": {
 				Type:     schema.TypeList,
 				Optional: true,
