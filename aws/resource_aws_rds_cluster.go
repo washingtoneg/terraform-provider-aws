@@ -414,6 +414,7 @@ func resourceAwsRDSCluster() *schema.Resource {
 					}, false),
 				},
 			},
+
 			"point_in_time_restore": {
 				Type:     schema.TypeList,
 				Optional: true,
@@ -461,6 +462,8 @@ func resourceAwsRDSCluster() *schema.Resource {
 						},
 					},
 				},
+			},
+
 			"enable_http_endpoint": {
 				Type:     schema.TypeBool,
 				Optional: true,
