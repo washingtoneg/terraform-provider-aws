@@ -9,28 +9,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
+	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/organizations"
-	"github.com/hashicorp/terraform/helper/resource"
-	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/terraform"
-	"github.com/terraform-providers/terraform-provider-template/template"
-	"github.com/terraform-providers/terraform-provider-tls/tls"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/structure"
+	"github.com/hashicorp/terraform-plugin-sdk/terraform"
 )
 
+const rfc3339RegexPattern = `^[0-9]{4}-(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])[Tt]([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]+)?([Zz]|([+-]([01][0-9]|2[0-3]):[0-5][0-9]))$`
+
 var testAccProviders map[string]terraform.ResourceProvider
-var testAccProvidersWithTLS map[string]terraform.ResourceProvider
 var testAccProviderFactories func(providers *[]*schema.Provider) map[string]terraform.ResourceProviderFactory
 var testAccProvider *schema.Provider
-var testAccTemplateProvider *schema.Provider
+var testAccProviderFunc func() *schema.Provider
 
 func init() {
 	testAccProvider = Provider().(*schema.Provider)
-	testAccTemplateProvider = template.Provider().(*schema.Provider)
 	testAccProviders = map[string]terraform.ResourceProvider{
-		"aws":      testAccProvider,
-		"template": testAccTemplateProvider,
+		"aws": testAccProvider,
 	}
 	testAccProviderFactories = func(providers *[]*schema.Provider) map[string]terraform.ResourceProviderFactory {
 		return map[string]terraform.ResourceProviderFactory{
@@ -39,20 +39,9 @@ func init() {
 				*providers = append(*providers, p.(*schema.Provider))
 				return p, nil
 			},
-			"tls": func() (terraform.ResourceProvider, error) {
-				p := tls.Provider()
-				*providers = append(*providers, p.(*schema.Provider))
-				return p, nil
-			},
 		}
 	}
-	testAccProvidersWithTLS = map[string]terraform.ResourceProvider{
-		"tls": tls.Provider(),
-	}
-
-	for k, v := range testAccProviders {
-		testAccProvidersWithTLS[k] = v
-	}
+	testAccProviderFunc = func() *schema.Provider { return testAccProvider }
 }
 
 func TestProvider(t *testing.T) {
@@ -78,7 +67,7 @@ func testAccPreCheck(t *testing.T) {
 	log.Printf("[INFO] Test: Using %s as test region", region)
 	os.Setenv("AWS_DEFAULT_REGION", region)
 
-	err := testAccProvider.Configure(terraform.NewResourceConfig(nil))
+	err := testAccProvider.Configure(terraform.NewResourceConfigRaw(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,6 +112,19 @@ func testAccCheckResourceAttrRegionalARN(resourceName, attributeName, arnService
 	}
 }
 
+// testAccCheckResourceAttrRegionalARNNoAccount ensures the Terraform state exactly matches a formatted ARN with region but without account ID
+func testAccCheckResourceAttrRegionalARNNoAccount(resourceName, attributeName, arnService, arnResource string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		attributeValue := arn.ARN{
+			Partition: testAccGetPartition(),
+			Region:    testAccGetRegion(),
+			Resource:  arnResource,
+			Service:   arnService,
+		}.String()
+		return resource.TestCheckResourceAttr(resourceName, attributeName, attributeValue)(s)
+	}
+}
+
 // testAccMatchResourceAttrRegionalARN ensures the Terraform state regexp matches a formatted ARN with region
 func testAccMatchResourceAttrRegionalARN(resourceName, attributeName, arnService string, arnResourceRegexp *regexp.Regexp) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
@@ -144,11 +146,58 @@ func testAccMatchResourceAttrRegionalARN(resourceName, attributeName, arnService
 	}
 }
 
+// testAccMatchResourceAttrRegionalARNNoAccount ensures the Terraform state regexp matches a formatted ARN with region but without account ID
+func testAccMatchResourceAttrRegionalARNNoAccount(resourceName, attributeName, arnService string, arnResourceRegexp *regexp.Regexp) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		arnRegexp := arn.ARN{
+			Partition: testAccGetPartition(),
+			Region:    testAccGetRegion(),
+			Resource:  arnResourceRegexp.String(),
+			Service:   arnService,
+		}.String()
+
+		attributeMatch, err := regexp.Compile(arnRegexp)
+
+		if err != nil {
+			return fmt.Errorf("Unable to compile ARN regexp (%s): %s", arnRegexp, err)
+		}
+
+		return resource.TestMatchResourceAttr(resourceName, attributeName, attributeMatch)(s)
+	}
+}
+
+// testAccMatchResourceAttrRegionalHostname ensures the Terraform state regexp matches a formatted DNS hostname with region and partition DNS suffix
+func testAccMatchResourceAttrRegionalHostname(resourceName, attributeName, serviceName string, hostnamePrefixRegexp *regexp.Regexp) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		hostnameRegexpPattern := fmt.Sprintf("%s\\.%s\\.%s\\.%s$", hostnamePrefixRegexp.String(), serviceName, testAccGetRegion(), testAccGetPartitionDNSSuffix())
+
+		hostnameRegexp, err := regexp.Compile(hostnameRegexpPattern)
+
+		if err != nil {
+			return fmt.Errorf("Unable to compile hostname regexp (%s): %s", hostnameRegexp, err)
+		}
+
+		return resource.TestMatchResourceAttr(resourceName, attributeName, hostnameRegexp)(s)
+	}
+}
+
 // testAccCheckResourceAttrGlobalARN ensures the Terraform state exactly matches a formatted ARN without region
 func testAccCheckResourceAttrGlobalARN(resourceName, attributeName, arnService, arnResource string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		attributeValue := arn.ARN{
 			AccountID: testAccGetAccountID(),
+			Partition: testAccGetPartition(),
+			Resource:  arnResource,
+			Service:   arnService,
+		}.String()
+		return resource.TestCheckResourceAttr(resourceName, attributeName, attributeValue)(s)
+	}
+}
+
+// testAccCheckResourceAttrGlobalARNNoAccount ensures the Terraform state exactly matches a formatted ARN without region or account ID
+func testAccCheckResourceAttrGlobalARNNoAccount(resourceName, attributeName, arnService, arnResource string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		attributeValue := arn.ARN{
 			Partition: testAccGetPartition(),
 			Resource:  arnResource,
 			Service:   arnService,
@@ -177,6 +226,104 @@ func testAccMatchResourceAttrGlobalARN(resourceName, attributeName, arnService s
 	}
 }
 
+// testAccCheckResourceAttrRfc3339 ensures the Terraform state matches a RFC3339 value
+// This TestCheckFunc will likely be moved to the Terraform Plugin SDK in the future.
+func testAccCheckResourceAttrRfc3339(resourceName, attributeName string) resource.TestCheckFunc {
+	return resource.TestMatchResourceAttr(resourceName, attributeName, regexp.MustCompile(rfc3339RegexPattern))
+}
+
+// testAccCheckListHasSomeElementAttrPair is a TestCheckFunc which validates that the collection on the left has an element with an attribute value
+// matching the value on the left
+// Based on TestCheckResourceAttrPair from the Terraform SDK testing framework
+func testAccCheckListHasSomeElementAttrPair(nameFirst string, resourceAttr string, elementAttr string, nameSecond string, keySecond string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		isFirst, err := primaryInstanceState(s, nameFirst)
+		if err != nil {
+			return err
+		}
+
+		isSecond, err := primaryInstanceState(s, nameSecond)
+		if err != nil {
+			return err
+		}
+
+		vSecond, ok := isSecond.Attributes[keySecond]
+		if !ok {
+			return fmt.Errorf("%s: No attribute %q found", nameSecond, keySecond)
+		} else if vSecond == "" {
+			return fmt.Errorf("%s: No value was set on attribute %q", nameSecond, keySecond)
+		}
+
+		attrsFirst := make([]string, 0, len(isFirst.Attributes))
+		attrMatcher := regexp.MustCompile(fmt.Sprintf("%s\\.\\d+\\.%s", resourceAttr, elementAttr))
+		for k := range isFirst.Attributes {
+			if attrMatcher.MatchString(k) {
+				attrsFirst = append(attrsFirst, k)
+			}
+		}
+
+		found := false
+		for _, attrName := range attrsFirst {
+			vFirst := isFirst.Attributes[attrName]
+			if vFirst == vSecond {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("%s: No element of %q found with attribute %q matching value %q set on %q of %s", nameFirst, resourceAttr, elementAttr, vSecond, keySecond, nameSecond)
+		}
+
+		return nil
+	}
+}
+
+// testAccCheckResourceAttrEquivalentJSON is a TestCheckFunc that compares a JSON value with an expected value. Both JSON
+// values are normalized before being compared.
+func testAccCheckResourceAttrEquivalentJSON(resourceName, attributeName, expectedJSON string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		is, err := primaryInstanceState(s, resourceName)
+		if err != nil {
+			return err
+		}
+
+		v, ok := is.Attributes[attributeName]
+		if !ok {
+			return fmt.Errorf("%s: No attribute %q found", resourceName, attributeName)
+		}
+
+		vNormal, err := structure.NormalizeJsonString(v)
+		if err != nil {
+			return fmt.Errorf("%s: Error normalizing JSON in %q: %w", resourceName, attributeName, err)
+		}
+
+		expectedNormal, err := structure.NormalizeJsonString(expectedJSON)
+		if err != nil {
+			return fmt.Errorf("Error normalizing expected JSON: %w", err)
+		}
+
+		if vNormal != expectedNormal {
+			return fmt.Errorf("%s: Attribute %q expected\n%s\ngot\n%s", resourceName, attributeName, expectedJSON, v)
+		}
+		return nil
+	}
+}
+
+// Copied and inlined from the SDK testing code
+func primaryInstanceState(s *terraform.State, name string) (*terraform.InstanceState, error) {
+	rs, ok := s.RootModule().Resources[name]
+	if !ok {
+		return nil, fmt.Errorf("Not found: %s", name)
+	}
+
+	is := rs.Primary
+	if is == nil {
+		return nil, fmt.Errorf("No primary instance: %s", name)
+	}
+
+	return is, nil
+}
+
 // testAccGetAccountID returns the account ID of testAccProvider
 // Must be used returned within a resource.TestCheckFunc
 func testAccGetAccountID() string {
@@ -191,8 +338,30 @@ func testAccGetRegion() string {
 	return v
 }
 
+func testAccGetAlternateRegion() string {
+	v := os.Getenv("AWS_ALTERNATE_REGION")
+	if v == "" {
+		return "us-east-1"
+	}
+	return v
+}
+
 func testAccGetPartition() string {
 	if partition, ok := endpoints.PartitionForRegion(endpoints.DefaultPartitions(), testAccGetRegion()); ok {
+		return partition.ID()
+	}
+	return "aws"
+}
+
+func testAccGetPartitionDNSSuffix() string {
+	if partition, ok := endpoints.PartitionForRegion(endpoints.DefaultPartitions(), testAccGetRegion()); ok {
+		return partition.DNSSuffix()
+	}
+	return "amazonaws.com"
+}
+
+func testAccGetAlternateRegionPartition() string {
+	if partition, ok := endpoints.PartitionForRegion(endpoints.DefaultPartitions(), testAccGetAlternateRegion()); ok {
 		return partition.ID()
 	}
 	return "aws"
@@ -208,6 +377,16 @@ func testAccAlternateAccountPreCheck(t *testing.T) {
 	}
 }
 
+func testAccAlternateRegionPreCheck(t *testing.T) {
+	if testAccGetRegion() == testAccGetAlternateRegion() {
+		t.Fatal("AWS_DEFAULT_REGION and AWS_ALTERNATE_REGION must be set to different values for acceptance tests")
+	}
+
+	if testAccGetPartition() != testAccGetAlternateRegionPartition() {
+		t.Fatalf("AWS_ALTERNATE_REGION partition (%s) does not match AWS_DEFAULT_REGION partition (%s)", testAccGetAlternateRegionPartition(), testAccGetPartition())
+	}
+}
+
 func testAccEC2ClassicPreCheck(t *testing.T) {
 	client := testAccProvider.Meta().(*AWSClient)
 	platforms := client.supportedplatforms
@@ -218,10 +397,20 @@ func testAccEC2ClassicPreCheck(t *testing.T) {
 	}
 }
 
-func testAccHasServicePreCheck(service string, t *testing.T) {
+func testAccEC2VPCOnlyPreCheck(t *testing.T) {
+	client := testAccProvider.Meta().(*AWSClient)
+	platforms := client.supportedplatforms
+	region := client.region
+	if hasEc2Classic(platforms) {
+		t.Skipf("This test can only in regions without EC2 Classic, platforms available in %s: %q",
+			region, platforms)
+	}
+}
+
+func testAccPartitionHasServicePreCheck(serviceId string, t *testing.T) {
 	if partition, ok := endpoints.PartitionForRegion(endpoints.DefaultPartitions(), testAccGetRegion()); ok {
-		if _, ok := partition.Services()[service]; !ok {
-			t.Skip(fmt.Sprintf("skipping tests; partition does not support %s service", service))
+		if _, ok := partition.Services()[serviceId]; !ok {
+			t.Skip(fmt.Sprintf("skipping tests; partition %s does not support %s service", partition.ID(), serviceId))
 		}
 	}
 }
@@ -247,7 +436,20 @@ func testAccOrganizationsAccountPreCheck(t *testing.T) {
 	t.Skip("skipping tests; this AWS account must not be an existing member of an AWS Organization")
 }
 
+func testAccOrganizationsEnabledPreCheck(t *testing.T) {
+	conn := testAccProvider.Meta().(*AWSClient).organizationsconn
+	input := &organizations.DescribeOrganizationInput{}
+	_, err := conn.DescribeOrganization(input)
+	if isAWSErr(err, organizations.ErrCodeAWSOrganizationsNotInUseException, "") {
+		t.Skip("this AWS account must be an existing member of an AWS Organization")
+	}
+	if err != nil {
+		t.Fatalf("error describing AWS Organization: %s", err)
+	}
+}
+
 func testAccAlternateAccountProviderConfig() string {
+	//lintignore:AT004
 	return fmt.Sprintf(`
 provider "aws" {
   access_key = %[1]q
@@ -258,6 +460,47 @@ provider "aws" {
 `, os.Getenv("AWS_ALTERNATE_ACCESS_KEY_ID"), os.Getenv("AWS_ALTERNATE_PROFILE"), os.Getenv("AWS_ALTERNATE_SECRET_ACCESS_KEY"))
 }
 
+func testAccAlternateAccountAlternateRegionProviderConfig() string {
+	//lintignore:AT004
+	return fmt.Sprintf(`
+provider "aws" {
+  access_key = %[1]q
+  alias      = "alternate"
+  profile    = %[2]q
+  region     = %[3]q
+  secret_key = %[4]q
+}
+`, os.Getenv("AWS_ALTERNATE_ACCESS_KEY_ID"), os.Getenv("AWS_ALTERNATE_PROFILE"), testAccGetAlternateRegion(), os.Getenv("AWS_ALTERNATE_SECRET_ACCESS_KEY"))
+}
+
+func testAccAlternateRegionProviderConfig() string {
+	//lintignore:AT004
+	return fmt.Sprintf(`
+provider "aws" {
+  alias  = "alternate"
+  region = %[1]q
+}
+`, testAccGetAlternateRegion())
+}
+
+func testAccProviderConfigIgnoreTagPrefixes1(keyPrefix1 string) string {
+	//lintignore:AT004
+	return fmt.Sprintf(`
+provider "aws" {
+  ignore_tag_prefixes = [%[1]q]
+}
+`, keyPrefix1)
+}
+
+func testAccProviderConfigIgnoreTags1(key1 string) string {
+	//lintignore:AT004
+	return fmt.Sprintf(`
+provider "aws" {
+  ignore_tags = [%[1]q]
+}
+`, key1)
+}
+
 // Provider configuration hardcoded for us-east-1.
 // This should only be necessary for testing ACM Certificates with CloudFront
 // related infrastucture such as API Gateway Domain Names for EDGE endpoints,
@@ -265,6 +508,7 @@ provider "aws" {
 // Other valid usage is for services only available in us-east-1 such as the
 // Cost and Usage Reporting and Pricing services.
 func testAccUsEast1RegionProviderConfig() string {
+	//lintignore:AT004
 	return fmt.Sprintf(`
 provider "aws" {
   alias  = "us-east-1"
@@ -332,11 +576,20 @@ func testAccCheckWithProviders(f func(*terraform.State, *schema.Provider) error,
 // Check service API call error for reasons to skip acceptance testing
 // These include missing API endpoints and unsupported API calls
 func testAccPreCheckSkipError(err error) bool {
+	// GovCloud has endpoints that respond with (no message provided after the error code):
+	// AccessDeniedException:
+	// Ignore these API endpoints that exist but are not officially enabled
+	if isAWSErr(err, "AccessDeniedException", "") {
+		return true
+	}
 	// Ignore missing API endpoints
 	if isAWSErr(err, "RequestError", "send request failed") {
 		return true
 	}
 	// Ignore unsupported API calls
+	if isAWSErr(err, "UnknownOperationException", "") {
+		return true
+	}
 	if isAWSErr(err, "UnsupportedOperation", "") {
 		return true
 	}
@@ -357,6 +610,10 @@ func testSweepSkipSweepError(err error) bool {
 	// Ignore more unsupported API calls
 	// InvalidParameterValue: Use of cache security groups is not permitted in this API version for your account.
 	if isAWSErr(err, "InvalidParameterValue", "not permitted in this API version for your account") {
+		return true
+	}
+	// InvalidParameterValue: Access Denied to API Version: APIGlobalDatabases
+	if isAWSErr(err, "InvalidParameterValue", "Access Denied to API Version") {
 		return true
 	}
 	// GovCloud has endpoints that respond with (no message provided):
@@ -394,6 +651,7 @@ func TestAccAWSProvider_Endpoints(t *testing.T) {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:          func() { testAccPreCheck(t) },
 		ProviderFactories: testAccProviderFactories(&providers),
+		CheckDestroy:      nil,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccAWSProviderConfigEndpoints(endpoints.String()),
@@ -422,15 +680,205 @@ func TestAccAWSProvider_Endpoints_Deprecated(t *testing.T) {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:          func() { testAccPreCheck(t) },
 		ProviderFactories: testAccProviderFactories(&providers),
+		CheckDestroy:      nil,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccAWSProviderConfigEndpoints(endpointsDeprecated.String()),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckAWSProviderEndpointsDeprecated(&providers),
+					testAccCheckAWSProviderEndpointsDeprecated(&providers)),
+			},
+		},
+	})
+}
+
+func TestAccAWSProvider_IgnoreTagPrefixes_None(t *testing.T) {
+	var providers []*schema.Provider
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:          func() { testAccPreCheck(t) },
+		ProviderFactories: testAccProviderFactories(&providers),
+		CheckDestroy:      nil,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSProviderConfigIgnoreTagPrefixes0(),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSProviderIgnoreTagPrefixes(&providers, []string{}),
 				),
 			},
 		},
 	})
+}
+
+func TestAccAWSProvider_IgnoreTagPrefixes_One(t *testing.T) {
+	var providers []*schema.Provider
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:          func() { testAccPreCheck(t) },
+		ProviderFactories: testAccProviderFactories(&providers),
+		CheckDestroy:      nil,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSProviderConfigIgnoreTagPrefixes1("test"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSProviderIgnoreTagPrefixes(&providers, []string{"test"}),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAWSProvider_IgnoreTagPrefixes_Multiple(t *testing.T) {
+	var providers []*schema.Provider
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:          func() { testAccPreCheck(t) },
+		ProviderFactories: testAccProviderFactories(&providers),
+		CheckDestroy:      nil,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSProviderConfigIgnoreTagPrefixes2("test1", "test2"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSProviderIgnoreTagPrefixes(&providers, []string{"test1", "test2"}),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAWSProvider_IgnoreTags_None(t *testing.T) {
+	var providers []*schema.Provider
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:          func() { testAccPreCheck(t) },
+		ProviderFactories: testAccProviderFactories(&providers),
+		CheckDestroy:      nil,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSProviderConfigIgnoreTags0(),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSProviderIgnoreTags(&providers, []string{}),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAWSProvider_IgnoreTags_One(t *testing.T) {
+	var providers []*schema.Provider
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:          func() { testAccPreCheck(t) },
+		ProviderFactories: testAccProviderFactories(&providers),
+		CheckDestroy:      nil,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSProviderConfigIgnoreTags1("test"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSProviderIgnoreTags(&providers, []string{"test"}),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAWSProvider_IgnoreTags_Multiple(t *testing.T) {
+	var providers []*schema.Provider
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:          func() { testAccPreCheck(t) },
+		ProviderFactories: testAccProviderFactories(&providers),
+		CheckDestroy:      nil,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSProviderConfigIgnoreTags2("test1", "test2"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSProviderIgnoreTags(&providers, []string{"test1", "test2"}),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAWSProvider_Region_AwsChina(t *testing.T) {
+	var providers []*schema.Provider
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:          func() { testAccPreCheck(t) },
+		ProviderFactories: testAccProviderFactories(&providers),
+		CheckDestroy:      nil,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSProviderConfigRegion("cn-northwest-1"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSProviderDnsSuffix(&providers, "amazonaws.com.cn"),
+					testAccCheckAWSProviderPartition(&providers, "aws-cn"),
+				),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+func TestAccAWSProvider_Region_AwsCommercial(t *testing.T) {
+	var providers []*schema.Provider
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:          func() { testAccPreCheck(t) },
+		ProviderFactories: testAccProviderFactories(&providers),
+		CheckDestroy:      nil,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSProviderConfigRegion("us-west-2"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSProviderDnsSuffix(&providers, "amazonaws.com"),
+					testAccCheckAWSProviderPartition(&providers, "aws"),
+				),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+func TestAccAWSProvider_Region_AwsGovCloudUs(t *testing.T) {
+	var providers []*schema.Provider
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:          func() { testAccPreCheck(t) },
+		ProviderFactories: testAccProviderFactories(&providers),
+		CheckDestroy:      nil,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSProviderConfigRegion("us-gov-west-1"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSProviderDnsSuffix(&providers, "amazonaws.com"),
+					testAccCheckAWSProviderPartition(&providers, "aws-us-gov"),
+				),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+func testAccCheckAWSProviderDnsSuffix(providers *[]*schema.Provider, expectedDnsSuffix string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		if providers == nil {
+			return fmt.Errorf("no providers initialized")
+		}
+
+		for _, provider := range *providers {
+			if provider == nil || provider.Meta() == nil || provider.Meta().(*AWSClient) == nil {
+				continue
+			}
+
+			providerDnsSuffix := provider.Meta().(*AWSClient).dnsSuffix
+
+			if providerDnsSuffix != expectedDnsSuffix {
+				return fmt.Errorf("expected DNS Suffix (%s), got: %s", expectedDnsSuffix, providerDnsSuffix)
+			}
+		}
+
+		return nil
+	}
 }
 
 func testAccCheckAWSProviderEndpoints(providers *[]*schema.Provider) resource.TestCheckFunc {
@@ -475,12 +923,7 @@ func testAccCheckAWSProviderEndpoints(providers *[]*schema.Provider) resource.Te
 					endpoint = "sfn"
 				}
 
-				switch name {
-				case endpoint, fmt.Sprintf("%sconn", endpoint), fmt.Sprintf("%sConn", endpoint):
-					return true
-				}
-
-				return false
+				return name == fmt.Sprintf("%sconn", endpoint)
 			}
 		}
 
@@ -566,7 +1009,185 @@ func testAccCheckAWSProviderEndpointsDeprecated(providers *[]*schema.Provider) r
 	}
 }
 
+func testAccCheckAWSProviderIgnoreTagPrefixes(providers *[]*schema.Provider, expectedIgnoreTagPrefixes []string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		if providers == nil {
+			return fmt.Errorf("no providers initialized")
+		}
+
+		for _, provider := range *providers {
+			if provider == nil || provider.Meta() == nil || provider.Meta().(*AWSClient) == nil {
+				continue
+			}
+
+			providerClient := provider.Meta().(*AWSClient)
+
+			actualIgnoreTagPrefixes := providerClient.ignoreTagPrefixes.Keys()
+
+			if len(actualIgnoreTagPrefixes) != len(expectedIgnoreTagPrefixes) {
+				return fmt.Errorf("expected ignore_tag_prefixes (%d) length, got: %d", len(expectedIgnoreTagPrefixes), len(actualIgnoreTagPrefixes))
+			}
+
+			for _, expectedElement := range expectedIgnoreTagPrefixes {
+				var found bool
+
+				for _, actualElement := range actualIgnoreTagPrefixes {
+					if actualElement == expectedElement {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					return fmt.Errorf("expected ignore_tag_prefixes element, but was missing: %s", expectedElement)
+				}
+			}
+
+			for _, actualElement := range actualIgnoreTagPrefixes {
+				var found bool
+
+				for _, expectedElement := range expectedIgnoreTagPrefixes {
+					if actualElement == expectedElement {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					return fmt.Errorf("unexpected ignore_tag_prefixes element: %s", actualElement)
+				}
+			}
+		}
+
+		return nil
+	}
+}
+
+func testAccCheckAWSProviderIgnoreTags(providers *[]*schema.Provider, expectedIgnoreTags []string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		if providers == nil {
+			return fmt.Errorf("no providers initialized")
+		}
+
+		for _, provider := range *providers {
+			if provider == nil || provider.Meta() == nil || provider.Meta().(*AWSClient) == nil {
+				continue
+			}
+
+			providerClient := provider.Meta().(*AWSClient)
+
+			actualIgnoreTags := providerClient.ignoreTags.Keys()
+
+			if len(actualIgnoreTags) != len(expectedIgnoreTags) {
+				return fmt.Errorf("expected ignore_tags (%d) length, got: %d", len(expectedIgnoreTags), len(actualIgnoreTags))
+			}
+
+			for _, expectedElement := range expectedIgnoreTags {
+				var found bool
+
+				for _, actualElement := range actualIgnoreTags {
+					if actualElement == expectedElement {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					return fmt.Errorf("expected ignore_tags element, but was missing: %s", expectedElement)
+				}
+			}
+
+			for _, actualElement := range actualIgnoreTags {
+				var found bool
+
+				for _, expectedElement := range expectedIgnoreTags {
+					if actualElement == expectedElement {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					return fmt.Errorf("unexpected ignore_tags element: %s", actualElement)
+				}
+			}
+		}
+
+		return nil
+	}
+}
+
+func testAccCheckAWSProviderPartition(providers *[]*schema.Provider, expectedPartition string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		if providers == nil {
+			return fmt.Errorf("no providers initialized")
+		}
+
+		for _, provider := range *providers {
+			if provider == nil || provider.Meta() == nil || provider.Meta().(*AWSClient) == nil {
+				continue
+			}
+
+			providerPartition := provider.Meta().(*AWSClient).partition
+
+			if providerPartition != expectedPartition {
+				return fmt.Errorf("expected DNS Suffix (%s), got: %s", expectedPartition, providerPartition)
+			}
+		}
+
+		return nil
+	}
+}
+
+// testAccPreCheckHasDefaultVpcOrEc2Classic checks that the test region has a default VPC or has the EC2-Classic platform.
+// This check is useful to ensure that an instance can be launched without specifying a subnet.
+func testAccPreCheckHasDefaultVpcOrEc2Classic(t *testing.T) {
+	client := testAccProvider.Meta().(*AWSClient)
+
+	if !testAccHasDefaultVpc(t) && !hasEc2Classic(client.supportedplatforms) {
+		t.Skipf("skipping tests; %s does not have a default VPC or EC2-Classic", client.region)
+	}
+}
+
+func testAccHasDefaultVpc(t *testing.T) bool {
+	conn := testAccProvider.Meta().(*AWSClient).ec2conn
+
+	resp, err := conn.DescribeAccountAttributes(&ec2.DescribeAccountAttributesInput{
+		AttributeNames: aws.StringSlice([]string{ec2.AccountAttributeNameDefaultVpc}),
+	})
+	if testAccPreCheckSkipError(err) ||
+		len(resp.AccountAttributes) == 0 ||
+		len(resp.AccountAttributes[0].AttributeValues) == 0 ||
+		aws.StringValue(resp.AccountAttributes[0].AttributeValues[0].AttributeValue) == "none" {
+		return false
+	}
+	if err != nil {
+		t.Fatalf("error describing EC2 account attributes: %s", err)
+	}
+
+	return true
+}
+
+// testAccPreCheckOffersEc2InstanceType checks that the test region offers the specified EC2 instance type.
+func testAccPreCheckOffersEc2InstanceType(t *testing.T, instanceType string) {
+	client := testAccProvider.Meta().(*AWSClient)
+
+	resp, err := client.ec2conn.DescribeInstanceTypeOfferings(&ec2.DescribeInstanceTypeOfferingsInput{
+		Filters: buildEC2AttributeFilterList(map[string]string{
+			"instance-type": instanceType,
+		}),
+		LocationType: aws.String(ec2.LocationTypeRegion),
+	})
+	if testAccPreCheckSkipError(err) || len(resp.InstanceTypeOfferings) == 0 {
+		t.Skipf("skipping tests; %s does not offer EC2 instance type: %s", client.region, instanceType)
+	}
+	if err != nil {
+		t.Fatalf("error describing EC2 instance type offerings: %s", err)
+	}
+}
+
 func testAccAWSProviderConfigEndpoints(endpoints string) string {
+	//lintignore:AT004
 	return fmt.Sprintf(`
 provider "aws" {
   skip_credentials_validation = true
@@ -575,7 +1196,7 @@ provider "aws" {
   skip_requesting_account_id  = true
 
   endpoints {
-%[1]s
+    %[1]s
   }
 }
 
@@ -584,4 +1205,158 @@ data "aws_arn" "test" {
   arn = "arn:aws:s3:::test"
 }
 `, endpoints)
+}
+
+func testAccAWSProviderConfigIgnoreTagPrefixes0() string {
+	//lintignore:AT004
+	return fmt.Sprintf(`
+provider "aws" {
+  skip_credentials_validation = true
+  skip_get_ec2_platforms      = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+}
+
+# Required to initialize the provider
+data "aws_arn" "test" {
+  arn = "arn:aws:s3:::test"
+}
+`)
+}
+
+func testAccAWSProviderConfigIgnoreTagPrefixes1(tagPrefix1 string) string {
+	//lintignore:AT004
+	return fmt.Sprintf(`
+provider "aws" {
+  ignore_tag_prefixes         = [%[1]q]
+  skip_credentials_validation = true
+  skip_get_ec2_platforms      = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+}
+
+# Required to initialize the provider
+data "aws_arn" "test" {
+  arn = "arn:aws:s3:::test"
+}
+`, tagPrefix1)
+}
+
+func testAccAWSProviderConfigIgnoreTagPrefixes2(tagPrefix1, tagPrefix2 string) string {
+	//lintignore:AT004
+	return fmt.Sprintf(`
+provider "aws" {
+  ignore_tag_prefixes         = [%[1]q, %[2]q]
+  skip_credentials_validation = true
+  skip_get_ec2_platforms      = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+}
+
+# Required to initialize the provider
+data "aws_arn" "test" {
+  arn = "arn:aws:s3:::test"
+}
+`, tagPrefix1, tagPrefix2)
+}
+
+func testAccAWSProviderConfigIgnoreTags0() string {
+	//lintignore:AT004
+	return fmt.Sprintf(`
+provider "aws" {
+  skip_credentials_validation = true
+  skip_get_ec2_platforms      = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+}
+
+# Required to initialize the provider
+data "aws_arn" "test" {
+  arn = "arn:aws:s3:::test"
+}
+`)
+}
+
+func testAccAWSProviderConfigIgnoreTags1(tag1 string) string {
+	//lintignore:AT004
+	return fmt.Sprintf(`
+provider "aws" {
+  ignore_tags                 = [%[1]q]
+  skip_credentials_validation = true
+  skip_get_ec2_platforms      = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+}
+
+# Required to initialize the provider
+data "aws_arn" "test" {
+  arn = "arn:aws:s3:::test"
+}
+`, tag1)
+}
+
+func testAccAWSProviderConfigIgnoreTags2(tag1, tag2 string) string {
+	//lintignore:AT004
+	return fmt.Sprintf(`
+provider "aws" {
+  ignore_tags                 = [%[1]q, %[2]q]
+  skip_credentials_validation = true
+  skip_get_ec2_platforms      = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+}
+
+# Required to initialize the provider
+data "aws_arn" "test" {
+  arn = "arn:aws:s3:::test"
+}
+`, tag1, tag2)
+}
+
+func testAccAWSProviderConfigRegion(region string) string {
+	//lintignore:AT004
+	return fmt.Sprintf(`
+provider "aws" {
+  region                      = %[1]q
+  skip_credentials_validation = true
+  skip_get_ec2_platforms      = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+}
+
+# Required to initialize the provider
+data "aws_arn" "test" {
+  arn = "arn:aws:s3:::test"
+}
+`, region)
+}
+
+func testAccAssumeRoleARNPreCheck(t *testing.T) {
+	v := os.Getenv("TF_ACC_ASSUME_ROLE_ARN")
+	if v == "" {
+		t.Skip("skipping tests; TF_ACC_ASSUME_ROLE_ARN must be set")
+	}
+}
+
+func testAccProviderConfigAssumeRolePolicy(policy string) string {
+	//lintignore:AT004
+	return fmt.Sprintf(`
+provider "aws" {
+	assume_role {
+		role_arn = %q
+		policy   = %q
+	}
+}
+`, os.Getenv("TF_ACC_ASSUME_ROLE_ARN"), policy)
+}
+
+// composeConfig can be called to concatenate multiple strings to build test configurations
+func composeConfig(config ...string) string {
+	var str strings.Builder
+
+	for _, conf := range config {
+		str.WriteString(conf)
+	}
+
+	return str.String()
 }

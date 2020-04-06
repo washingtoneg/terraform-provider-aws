@@ -1,7 +1,7 @@
 ---
+subcategory: "VPC"
 layout: "aws"
 page_title: "AWS: aws_default_route_table"
-sidebar_current: "docs-aws-resource-default-route-table"
 description: |-
   Provides a resource to manage a Default VPC Routing Table.
 ---
@@ -40,7 +40,7 @@ in conjunction with any Route resources. Doing so will cause
 a conflict of rule settings and will overwrite routes.
 
 
-## Example usage with tags:
+## Example usage with tags
 
 ```hcl
 resource "aws_default_route_table" "r" {
@@ -71,7 +71,7 @@ The following arguments are supported:
 One of the following destination arguments must be supplied:
 
 * `cidr_block` - (Required) The CIDR block of the route.
-* `ipv6_cidr_block` - Optional) The Ipv6 CIDR block of the route
+* `ipv6_cidr_block` - (Optional) The Ipv6 CIDR block of the route
 
 One of the following target arguments must be supplied:
 

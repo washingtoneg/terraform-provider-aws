@@ -5,8 +5,8 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/hashicorp/terraform/helper/acctest"
-	"github.com/hashicorp/terraform/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/acctest"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
 )
 
 func TestAccDataSourceAwsSubnet_basic(t *testing.T) {
@@ -183,7 +183,14 @@ func TestAccDataSourceAwsSubnet_ipv6ByIpv6CidrBlock(t *testing.T) {
 
 func testAccDataSourceAwsSubnetConfig(rInt int) string {
 	return fmt.Sprintf(`
-data "aws_availability_zones" "available" {}
+data "aws_availability_zones" "available" {
+  state = "available"
+
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
+  }
+}
 
 resource "aws_vpc" "test" {
   cidr_block = "172.%d.0.0/16"
@@ -226,7 +233,7 @@ data "aws_subnet" "by_vpc" {
 
 data "aws_subnet" "by_filter" {
   filter {
-    name = "vpc-id"
+    name   = "vpc-id"
     values = ["${aws_subnet.test.vpc_id}"]
   }
 }
@@ -240,10 +247,17 @@ data "aws_subnet" "by_az_id" {
 
 func testAccDataSourceAwsSubnetConfigIpv6(rInt int) string {
 	return fmt.Sprintf(`
-data "aws_availability_zones" "available" {}
+data "aws_availability_zones" "available" {
+  state = "available"
+
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
+  }
+}
 
 resource "aws_vpc" "test" {
-  cidr_block = "172.%d.0.0/16"
+  cidr_block                       = "172.%d.0.0/16"
   assign_generated_ipv6_cidr_block = true
 
   tags = {
@@ -255,7 +269,7 @@ resource "aws_subnet" "test" {
   vpc_id            = "${aws_vpc.test.id}"
   cidr_block        = "172.%d.123.0/24"
   availability_zone = "${data.aws_availability_zones.available.names[0]}"
-  ipv6_cidr_block = "${cidrsubnet(aws_vpc.test.ipv6_cidr_block, 8, 1)}"
+  ipv6_cidr_block   = "${cidrsubnet(aws_vpc.test.ipv6_cidr_block, 8, 1)}"
 
   tags = {
     Name = "tf-acc-subnet-data-source-ipv6"
@@ -266,10 +280,17 @@ resource "aws_subnet" "test" {
 
 func testAccDataSourceAwsSubnetConfigIpv6WithDataSourceFilter(rInt int) string {
 	return fmt.Sprintf(`
-data "aws_availability_zones" "available" {}
+data "aws_availability_zones" "available" {
+  state = "available"
+
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
+  }
+}
 
 resource "aws_vpc" "test" {
-  cidr_block = "172.%d.0.0/16"
+  cidr_block                       = "172.%d.0.0/16"
   assign_generated_ipv6_cidr_block = true
 
   tags = {
@@ -281,7 +302,7 @@ resource "aws_subnet" "test" {
   vpc_id            = "${aws_vpc.test.id}"
   cidr_block        = "172.%d.123.0/24"
   availability_zone = "${data.aws_availability_zones.available.names[0]}"
-  ipv6_cidr_block = "${cidrsubnet(aws_vpc.test.ipv6_cidr_block, 8, 1)}"
+  ipv6_cidr_block   = "${cidrsubnet(aws_vpc.test.ipv6_cidr_block, 8, 1)}"
 
   tags = {
     Name = "tf-acc-subnet-data-source-ipv6-with-ds-filter"
@@ -290,7 +311,7 @@ resource "aws_subnet" "test" {
 
 data "aws_subnet" "by_ipv6_cidr" {
   filter {
-    name = "ipv6-cidr-block-association.ipv6-cidr-block"
+    name   = "ipv6-cidr-block-association.ipv6-cidr-block"
     values = ["${aws_subnet.test.ipv6_cidr_block}"]
   }
 }
@@ -299,10 +320,17 @@ data "aws_subnet" "by_ipv6_cidr" {
 
 func testAccDataSourceAwsSubnetConfigIpv6WithDataSourceIpv6CidrBlock(rInt int) string {
 	return fmt.Sprintf(`
-data "aws_availability_zones" "available" {}
+data "aws_availability_zones" "available" {
+  state = "available"
+
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
+  }
+}
 
 resource "aws_vpc" "test" {
-  cidr_block = "172.%d.0.0/16"
+  cidr_block                       = "172.%d.0.0/16"
   assign_generated_ipv6_cidr_block = true
 
   tags = {
@@ -314,7 +342,7 @@ resource "aws_subnet" "test" {
   vpc_id            = "${aws_vpc.test.id}"
   cidr_block        = "172.%d.123.0/24"
   availability_zone = "${data.aws_availability_zones.available.names[0]}"
-  ipv6_cidr_block = "${cidrsubnet(aws_vpc.test.ipv6_cidr_block, 8, 1)}"
+  ipv6_cidr_block   = "${cidrsubnet(aws_vpc.test.ipv6_cidr_block, 8, 1)}"
 
   tags = {
     Name = "tf-acc-subnet-data-source-ipv6-cidr-block"

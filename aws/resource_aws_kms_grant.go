@@ -10,10 +10,10 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/kms"
-	"github.com/hashicorp/terraform/helper/hashcode"
-	"github.com/hashicorp/terraform/helper/resource"
-	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/hashcode"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/validation"
 )
 
 func resourceAwsKmsGrant() *schema.Resource {
@@ -24,6 +24,19 @@ func resourceAwsKmsGrant() *schema.Resource {
 		Read:   resourceAwsKmsGrantRead,
 		Delete: resourceAwsKmsGrantDelete,
 		Exists: resourceAwsKmsGrantExists,
+		Importer: &schema.ResourceImporter{
+			State: func(d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
+				keyId, grantId, err := decodeKmsGrantId(d.Id())
+				if err != nil {
+					return nil, err
+				}
+				d.Set("key_id", keyId)
+				d.Set("grant_id", grantId)
+				d.SetId(fmt.Sprintf("%s:%s", keyId, grantId))
+
+				return []*schema.ResourceData{d}, nil
+			},
+		},
 
 		Schema: map[string]*schema.Schema{
 			"name": {
@@ -149,7 +162,6 @@ func resourceAwsKmsGrantCreate(d *schema.ResourceData, meta interface{}) error {
 
 	err := resource.Retry(3*time.Minute, func() *resource.RetryError {
 		var err error
-
 		out, err = conn.CreateGrant(&input)
 
 		if err != nil {
@@ -169,8 +181,12 @@ func resourceAwsKmsGrantCreate(d *schema.ResourceData, meta interface{}) error {
 		return nil
 	})
 
+	if isResourceTimeoutError(err) {
+		out, err = conn.CreateGrant(&input)
+	}
+
 	if err != nil {
-		return err
+		return fmt.Errorf("Error creating KMS grant: %s", err)
 	}
 
 	log.Printf("[DEBUG] Created new KMS Grant: %s", *out.GrantId)
@@ -193,6 +209,11 @@ func resourceAwsKmsGrantRead(d *schema.ResourceData, meta interface{}) error {
 	grant, err := findKmsGrantByIdWithRetry(conn, keyId, grantId)
 
 	if err != nil {
+		if isResourceNotFoundError(err) {
+			log.Printf("[WARN] %s KMS grant id not found for key id %s, removing from state file", grantId, keyId)
+			d.SetId("")
+			return nil
+		}
 		return err
 	}
 
@@ -290,6 +311,9 @@ func resourceAwsKmsGrantExists(d *schema.ResourceData, meta interface{}) (bool, 
 	grant, err := findKmsGrantByIdWithRetry(conn, keyId, grantId)
 
 	if err != nil {
+		if isResourceNotFoundError(err) {
+			return false, nil
+		}
 		return true, err
 	}
 	if grant != nil {
@@ -333,14 +357,19 @@ func findKmsGrantByIdWithRetry(conn *kms.KMS, keyId string, grantId string) (*km
 
 		return nil
 	})
+	if isResourceTimeoutError(err) {
+		grant, err = findKmsGrantById(conn, keyId, grantId, nil)
+	}
 
 	return grant, err
 }
 
 // Used by the tests as well
 func waitForKmsGrantToBeRevoked(conn *kms.KMS, keyId string, grantId string) error {
+	var grant *kms.GrantListEntry
 	err := resource.Retry(3*time.Minute, func() *resource.RetryError {
-		grant, err := findKmsGrantById(conn, keyId, grantId, nil)
+		var err error
+		grant, err = findKmsGrantById(conn, keyId, grantId, nil)
 
 		if isResourceNotFoundError(err) {
 			return nil
@@ -354,6 +383,9 @@ func waitForKmsGrantToBeRevoked(conn *kms.KMS, keyId string, grantId string) err
 
 		return resource.NonRetryableError(err)
 	})
+	if isResourceTimeoutError(err) {
+		grant, err = findKmsGrantById(conn, keyId, grantId, nil)
+	}
 
 	return err
 }
@@ -387,6 +419,10 @@ func findKmsGrantById(conn *kms.KMS, keyId string, grantId string, marker *strin
 
 		return nil
 	})
+	if isResourceTimeoutError(err) {
+		out, err = conn.ListGrants(&input)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("error listing KMS Grants: %s", err)
 	}
@@ -518,16 +554,16 @@ func flattenKmsGrantConstraints(constraint *kms.GrantConstraints) *schema.Set {
 
 func decodeKmsGrantId(id string) (string, string, error) {
 	if strings.HasPrefix(id, "arn:aws") {
-		arn_parts := strings.Split(id, "/")
-		if len(arn_parts) != 2 {
+		arnParts := strings.Split(id, "/")
+		if len(arnParts) != 2 {
 			return "", "", fmt.Errorf("unexpected format of ARN (%q), expected KeyID:GrantID", id)
 		}
-		arn_prefix := arn_parts[0]
-		parts := strings.Split(arn_parts[1], ":")
+		arnPrefix := arnParts[0]
+		parts := strings.Split(arnParts[1], ":")
 		if len(parts) != 2 {
 			return "", "", fmt.Errorf("unexpected format of ID (%q), expected KeyID:GrantID", id)
 		}
-		return fmt.Sprintf("%s/%s", arn_prefix, parts[0]), parts[1], nil
+		return fmt.Sprintf("%s/%s", arnPrefix, parts[0]), parts[1], nil
 	} else {
 		parts := strings.Split(id, ":")
 		if len(parts) != 2 {

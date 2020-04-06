@@ -9,8 +9,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/hashicorp/terraform/helper/resource"
-	"github.com/hashicorp/terraform/terraform"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/terraform"
 )
 
 func init() {
@@ -241,31 +241,33 @@ func TestAccAWSRouteTable_ipv6(t *testing.T) {
 
 func TestAccAWSRouteTable_tags(t *testing.T) {
 	var route_table ec2.RouteTable
+	resourceName := "aws_route_table.foo"
 
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:      func() { testAccPreCheck(t) },
-		IDRefreshName: "aws_route_table.foo",
+		IDRefreshName: resourceName,
 		Providers:     testAccProviders,
 		CheckDestroy:  testAccCheckRouteTableDestroy,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccRouteTableConfigTags,
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckRouteTableExists("aws_route_table.foo", &route_table),
-					testAccCheckTags(&route_table.Tags, "foo", "bar"),
+					testAccCheckRouteTableExists(resourceName, &route_table),
+					resource.TestCheckResourceAttr(resourceName, "tags.%", "1"),
+					resource.TestCheckResourceAttr(resourceName, "tags.foo", "bar"),
 				),
 			},
 			{
-				ResourceName:      "aws_route_table.foo",
+				ResourceName:      resourceName,
 				ImportState:       true,
 				ImportStateVerify: true,
 			},
 			{
 				Config: testAccRouteTableConfigTagsUpdate,
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckRouteTableExists("aws_route_table.foo", &route_table),
-					testAccCheckTags(&route_table.Tags, "foo", ""),
-					testAccCheckTags(&route_table.Tags, "bar", "baz"),
+					testAccCheckRouteTableExists(resourceName, &route_table),
+					resource.TestCheckResourceAttr(resourceName, "tags.%", "1"),
+					resource.TestCheckResourceAttr(resourceName, "tags.bar", "baz"),
 				),
 			},
 		},
@@ -597,6 +599,21 @@ resource "aws_route_table" "foo" {
 `
 
 const testAccRouteTableConfigInstance = `
+data "aws_ami" "amzn-ami-minimal-hvm" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name = "name"
+    values = ["amzn-ami-minimal-hvm-*"]
+  }
+
+  filter {
+    name = "root-device-type"
+    values = ["ebs"]
+  }
+}
+
 resource "aws_vpc" "foo" {
 	cidr_block = "10.1.0.0/16"
 	tags = {
@@ -613,10 +630,9 @@ resource "aws_subnet" "foo" {
 }
 
 resource "aws_instance" "foo" {
-	# us-west-2
-	ami = "ami-4fccb37f"
-	instance_type = "m1.small"
-	subnet_id = "${aws_subnet.foo.id}"
+  ami           = "${data.aws_ami.amzn-ami-minimal-hvm.id}"
+  instance_type = "t2.micro"
+  subnet_id     = "${aws_subnet.foo.id}"
 }
 
 resource "aws_route_table" "foo" {
@@ -753,15 +769,17 @@ func testAccAWSRouteTableConfigRouteConfigModeBlocks() string {
 	return fmt.Sprintf(`
 resource "aws_vpc" "test" {
   cidr_block = "10.0.0.0/16"
-  tags       = {
+
+  tags = {
     Name = "tf-acc-test-ec2-route-table-config-mode"
   }
 }
 
 resource "aws_internet_gateway" "test" {
-  tags   = {
+  tags = {
     Name = "tf-acc-test-ec2-route-table-config-mode"
   }
+
   vpc_id = "${aws_vpc.test.id}"
 }
 
@@ -785,15 +803,17 @@ func testAccAWSRouteTableConfigRouteConfigModeNoBlocks() string {
 	return fmt.Sprintf(`
 resource "aws_vpc" "test" {
   cidr_block = "10.0.0.0/16"
-  tags       = {
+
+  tags = {
     Name = "tf-acc-test-ec2-route-table-config-mode"
   }
 }
 
 resource "aws_internet_gateway" "test" {
-  tags   = {
+  tags = {
     Name = "tf-acc-test-ec2-route-table-config-mode"
   }
+
   vpc_id = "${aws_vpc.test.id}"
 }
 
@@ -807,15 +827,17 @@ func testAccAWSRouteTableConfigRouteConfigModeZeroed() string {
 	return fmt.Sprintf(`
 resource "aws_vpc" "test" {
   cidr_block = "10.0.0.0/16"
-  tags       = {
+
+  tags = {
     Name = "tf-acc-test-ec2-route-table-config-mode"
   }
 }
 
 resource "aws_internet_gateway" "test" {
-  tags   = {
+  tags = {
     Name = "tf-acc-test-ec2-route-table-config-mode"
   }
+
   vpc_id = "${aws_vpc.test.id}"
 }
 
@@ -828,6 +850,17 @@ resource "aws_route_table" "test" {
 
 func testAccAWSRouteTableConfigRouteTransitGatewayID() string {
 	return fmt.Sprintf(`
+data "aws_availability_zones" "available" {
+  # IncorrectState: Transit Gateway is not available in availability zone us-west-2d
+  blacklisted_zone_ids = ["usw2-az4"]
+  state                = "available"
+
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
+  }
+}
+
 resource "aws_vpc" "test" {
   cidr_block = "10.0.0.0/16"
 
@@ -837,8 +870,9 @@ resource "aws_vpc" "test" {
 }
 
 resource "aws_subnet" "test" {
-  cidr_block = "10.0.0.0/24"
-  vpc_id     = "${aws_vpc.test.id}"
+  availability_zone = "${data.aws_availability_zones.available.names[0]}"
+  cidr_block        = "10.0.0.0/24"
+  vpc_id            = "${aws_vpc.test.id}"
 
   tags = {
     Name = "tf-acc-test-ec2-route-table-transit-gateway-id"
